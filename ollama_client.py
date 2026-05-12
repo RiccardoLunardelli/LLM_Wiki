@@ -1,32 +1,45 @@
 import ollama
+import json
 
 
 # LLM
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "llama3.1:8b"
+MODEL = "llama3.1:8b" #"gpt-oss:20b"
 
 # chiamata modello
 def ollama_generate(prompt, json_mode=False):
     try:
         kwargs = {
             "model": MODEL,
-            "prompt": prompt,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
             "stream": False,
             "options": {
-                "temperature": 0.0,
-                "top_p": 0.9
+                "temperature": 0.0
             }
         }
 
         if json_mode:
             kwargs["format"] = "json"
 
-        response = ollama.generate(**kwargs)
+        response = ollama.chat(**kwargs)
 
-        return response.get("response", "").strip()
+        content = response["message"]["content"].strip()
+
+        print("RESPONSE RAW:", repr(response))
+        print("RESPONSE TEXT:", repr(content))
+
+        if not content:
+            raise RuntimeError("Il modello ha restituito una risposta vuota.")
+
+        if json_mode:
+            json.loads(content)
+
+        return content
 
     except Exception as exc:
         raise RuntimeError(
-            "Ollama non raggiungibile o modello non disponibile. "
-            "Verifica che Ollama sia attivo e che llama3.1:8b sia installato."
+            f"Ollama non raggiungibile o modello non disponibile. "
+            f"Verifica che Ollama sia attivo e che {MODEL} sia installato. "
+            f"Errore originale: {exc}"
         ) from exc

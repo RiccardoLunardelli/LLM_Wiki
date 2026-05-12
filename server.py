@@ -1,9 +1,9 @@
-# 10.0.20.68
+import threading
 
-import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
-from threading import Lock
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
+import uvicorn
 
 from agent import process_message
 
@@ -11,7 +11,7 @@ from agent import process_message
 HOST = "0.0.0.0"
 PORT = 8000
 
-agent_lock = Lock()
+agent_lock = threading.Lock()
 
 
 HTML = """
@@ -71,7 +71,7 @@ HTML = """
       answerBox.textContent = "Elaborazione...";
 
       try {
-        const response = await fetch("/api/ask", {
+        const response = await fetch("/api/prompt", {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
@@ -97,61 +97,38 @@ HTML = """
 """
 
 
-class Handler(BaseHTTPRequestHandler):
-    def send_json(self, status, payload):
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+class AskRequest(BaseModel):
+    question: str
 
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def do_GET(self):
-        path = urlparse(self.path).path
+app = FastAPI()
 
-        if path != "/":
-            self.send_error(404)
-            return
 
-        body = HTML.encode("utf-8")
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return HTML
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def do_POST(self):
-        path = urlparse(self.path).path
-
-        if path != "/api/ask":
-            self.send_error(404)
-            return
-
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-            raw_body = self.rfile.read(length)
-            data = json.loads(raw_body.decode("utf-8"))
-
-            question = data.get("question", "")
-
-            with agent_lock:
-                result = process_message(question)
-
-            self.send_json(200, result)
-
-        except Exception as exc:
-            self.send_json(500, {
+@app.post("/api/prompt")
+def ask(payload: AskRequest):
+    try:
+        with agent_lock:
+            result = process_message(payload.question)
+        return JSONResponse(status_code=200, content=result)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
                 "ok": False,
-                "error": str(exc)
-            })
+                "error": str(exc),
+            },
+        )
 
 
 def main():
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+
     print(f"Server attivo su http://{HOST}:{PORT}")
-    server.serve_forever()
+    uvicorn.run(app, host=HOST, port=PORT)
 
 
 if __name__ == "__main__":

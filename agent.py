@@ -1,35 +1,46 @@
-import json 
-import re 
-import sys 
+import json
+import re
 from pathlib import Path
 from datetime import datetime
-from model_prompt import INTENT_PROMPT, INGEST_PROMPT, QUERY_SELECT_PROMPT, QUERY_SYNTHESIS_PROMPT, LINT_PROMPT
+
+from model_prompt import (
+    INTENT_PROMPT,
+    INGEST_PROMPT,
+    QUERY_SELECT_PROMPT,
+    QUERY_SYNTHESIS_PROMPT,
+    LINT_PROMPT,
+)
 from ollama_client import ollama_generate
 
-# Cartelle e file
-ROOT = Path(__file__).resolve().parent 
-RAW_DIR = ROOT / 'raw'
-WIKI_DIR = ROOT / 'wiki'
-AGENT_MD = ROOT / 'agent.md'
-INDEX_MD = ROOT / 'index.md'
-LOG_MD = ROOT / 'log.md'
 
-#------INIT----------
+ROOT = Path(__file__).resolve().parent
+RAW_DIR = ROOT / "raw"
+WIKI_DIR = ROOT / "wiki"
+AGENT_MD = ROOT / "agent.md"
+INDEX_MD = ROOT / "index.md"
+LOG_MD = ROOT / "log.md"
+
+
 def now_date():
     return datetime.now().strftime("%Y-%m-%d")
+
 
 def now_stamp():
     return datetime.now().strftime("%Y-%m-%d-%H%M%S")
 
+
 def read_text(path):
-    return path.read_text(encoding='utf-8')
+    return path.read_text(encoding="utf-8")
+
 
 def write_text(path, text):
-    path.write_text(text, encoding='utf-8')
+    path.write_text(text, encoding="utf-8")
+
 
 def append_text(path, text):
-    with path.open('a', encoding='utf-8') as f:
-        f.write(text) 
+    with path.open("a", encoding="utf-8") as f:
+        f.write(text)
+
 
 def safe_slug(title):
     slug = title.lower().strip()
@@ -38,39 +49,50 @@ def safe_slug(title):
     slug = re.sub(r"-+", "-", slug)
     return slug[:80].strip("-") or "pagina"
 
+
 def extract_json(text):
+    if not isinstance(text, str):
+        text = str(text)
+
     text = text.strip()
 
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        pass 
+        pass
 
-    match = re.search(r"\{.*\}", text, re.DOTALL)
+    match = re.search(r"\{[\s\S]*\}", text)
     if not match:
-        raise ValueError("Nessun JSON trovato nella risposta")
+        raise ValueError(f"Nessun JSON trovato nella risposta: {text!r}")
 
     return json.loads(match.group(0))
 
-#-----CLASSIFIER----------
+
 def classify_intent(user_input):
     prompt = INTENT_PROMPT.format(user_input=user_input)
     response = ollama_generate(prompt, json_mode=True)
-    
+
+    if not response.strip():
+        raise RuntimeError(
+            "Il modello ha restituito una risposta vuota durante la classificazione intent."
+        )
+
     try:
         data = extract_json(response)
     except Exception as e:
-        raise RuntimeError(f"JSON intent non valido:\n{response}") from e
-    
+        raise RuntimeError(
+            f"JSON intent non valido.\nRisposta raw del modello:\n{response!r}"
+        ) from e
+
     intent = data.get("intent")
     allowed = {"INGEST", "QUERY", "LINT", "HELP", "EXIT"}
 
     if intent not in allowed:
         raise RuntimeError(f"Intent non valido: {intent}")
-    
-    return intent 
 
-#------INGEST-----------
+    return intent
+
+
 def resolve_ingest_source(user_input):
     payload = user_input.strip()
 
@@ -99,6 +121,7 @@ def resolve_ingest_source(user_input):
 
     return path.relative_to(ROOT).as_posix(), markdown
 
+
 def load_existing_pages_for_ingest():
     chunks = []
 
@@ -112,6 +135,7 @@ def load_existing_pages_for_ingest():
         return "Nessuna pagina esistente."
 
     return "\n".join(chunks)
+
 
 def build_wiki_markdown(page, source_path):
     title = page.get("title", "Senza titolo")
@@ -164,12 +188,13 @@ source: {source_json}
 {list_or_empty(notes)}
 """
 
+
 def apply_ingest_result(result, source_path):
     pages = result.get("pages", [])
 
     if not isinstance(pages, list):
         raise RuntimeError("JSON ingest non valido: campo pages mancante o errato.")
-    
+
     if not pages:
         raise RuntimeError(
             "L'ingest non ha prodotto nessuna pagina wiki. "
@@ -181,11 +206,11 @@ def apply_ingest_result(result, source_path):
         slug = page.get("slug") or safe_slug(title)
 
         markdown = build_wiki_markdown(page, source_path)
-
         path = WIKI_DIR / f"{safe_slug(slug)}.md"
         write_text(path, markdown.strip() + "\n")
 
     rebuild_index(result.get("index_entries", []))
+
 
 def rebuild_index(new_entries):
     existing = {}
@@ -199,18 +224,19 @@ def rebuild_index(new_entries):
                     "title": match.group(1),
                     "path": match.group(2),
                     "summary": match.group(3),
-                    "tags": []
+                    "tags": [],
                 }
 
     for entry in new_entries:
         path = entry.get("path")
         if not path:
             continue
+
         existing[path] = {
             "title": entry.get("title", path),
             "path": path,
             "summary": entry.get("summary", ""),
-            "tags": entry.get("tags", [])
+            "tags": entry.get("tags", []),
         }
 
     lines = ["# Index", ""]
@@ -228,6 +254,7 @@ def rebuild_index(new_entries):
 
     write_text(INDEX_MD, "\n".join(lines).strip() + "\n")
 
+
 def handle_ingest(user_input):
     source_path, source_text = resolve_ingest_source(user_input)
 
@@ -237,26 +264,29 @@ def handle_ingest(user_input):
         agent_rules=read_text(AGENT_MD),
         index=read_text(INDEX_MD),
         existing_pages=load_existing_pages_for_ingest(),
-        source_text=source_text
+        source_text=source_text,
     )
 
     response = ollama_generate(prompt, json_mode=True)
 
+    if not response.strip():
+        raise RuntimeError("Il modello ha restituito una risposta vuota durante l'ingest.")
+
     try:
         result = extract_json(response)
     except Exception as e:
-        raise RuntimeError(f"JSON ingest non valido:\n{response}") from e
+        raise RuntimeError(f"JSON ingest non valido:\n{response!r}") from e
 
     apply_ingest_result(result, source_path)
 
     append_text(
         LOG_MD,
-        f"\n## [{now_date()}] INGEST | {source_path}\n"
+        f"\n## [{now_date()}] INGEST | {source_path}\n",
     )
 
     return f"Ingest completato: {source_path}"
 
-#-----QUERY--------
+
 def normalize_wiki_path(path_text):
     path_text = path_text.strip()
 
@@ -279,15 +309,18 @@ def handle_query(user_input):
 
     select_prompt = QUERY_SELECT_PROMPT.format(
         question=question,
-        index=read_text(INDEX_MD)
+        index=read_text(INDEX_MD),
     )
 
     response = ollama_generate(select_prompt, json_mode=True)
 
+    if not response.strip():
+        raise RuntimeError("Il modello ha restituito una risposta vuota nella selezione pagine.")
+
     try:
         data = extract_json(response)
     except Exception as e:
-        raise RuntimeError(f"JSON selezione pagine non valido:\n{response}") from e
+        raise RuntimeError(f"JSON selezione pagine non valido:\n{response!r}") from e
 
     selected = data.get("pages", [])
 
@@ -311,45 +344,41 @@ def handle_query(user_input):
 
     synthesis_prompt = QUERY_SYNTHESIS_PROMPT.format(
         question=question,
-        pages_content="\n".join(chunks)
+        pages_content="\n".join(chunks),
     )
 
     answer = ollama_generate(synthesis_prompt)
     return answer.strip()
 
-#----LINT------
 
 def handle_lint():
     chunks = []
 
     for path in sorted(WIKI_DIR.glob("*.md")):
-        chunks.append(
-            f"\n--- {path.relative_to(ROOT).as_posix()} ---\n{read_text(path)}"
-        )
+        chunks.append(f"\n--- {path.relative_to(ROOT).as_posix()} ---\n{read_text(path)}")
 
     if not chunks:
         return "Nessuna pagina wiki da analizzare."
 
-
     prompt = LINT_PROMPT.format(
         index=read_text(INDEX_MD),
-        pages_content="\n".join(chunks)
+        pages_content="\n".join(chunks),
     )
 
     report = ollama_generate(prompt)
     return report.strip()
 
-#------CLI------
 
 def print_help():
-    print("""
+    print(
+        """
 Comandi disponibili:
 
-  ingest raw/nome-file.txt
+  ingest raw/nome-file.md
       Importa una fonte già presente in raw/.
 
   ingest testo libero
-      Salva il testo in raw/ingest-YYYY-MM-DD-HHMMSS.txt e lo importa.
+      Salva il testo in raw/ingest-YYYY-MM-DD-HHMMSS.md e lo importa.
 
   query domanda
       Interroga la wiki.
@@ -362,7 +391,9 @@ Comandi disponibili:
 
   exit
       Esce dal programma.
-""")
+""".strip()
+    )
+
 
 def ensure_structure():
     RAW_DIR.mkdir(exist_ok=True)
@@ -377,6 +408,7 @@ def ensure_structure():
     if not AGENT_MD.exists():
         raise RuntimeError("File agent.md mancante.")
 
+
 def process_message(user_input):
     ensure_structure()
 
@@ -385,7 +417,7 @@ def process_message(user_input):
     if not user_input:
         return {
             "ok": False,
-            "answer": "Messaggio vuoto."
+            "answer": "Messaggio vuoto.",
         }
 
     intent = classify_intent(user_input)
@@ -393,7 +425,7 @@ def process_message(user_input):
     if intent == "EXIT":
         return {
             "ok": True,
-            "answer": "Il comando EXIT non e' disponibile dal server web."
+            "answer": "Il comando EXIT non e' disponibile dal server web.",
         }
 
     if intent == "HELP":
@@ -407,31 +439,32 @@ ingest testo libero
 query domanda
 lint
 help
-""".strip()
+""".strip(),
         }
 
     if intent == "LINT":
         return {
             "ok": True,
-            "answer": handle_lint()
+            "answer": handle_lint(),
         }
 
     if intent == "INGEST":
         return {
             "ok": True,
-            "answer": handle_ingest(user_input)
+            "answer": handle_ingest(user_input),
         }
 
     if intent == "QUERY":
         return {
             "ok": True,
-            "answer": handle_query(user_input)
+            "answer": handle_query(user_input),
         }
 
     return {
         "ok": False,
-        "answer": f"Intent non gestito: {intent}"
+        "answer": f"Intent non gestito: {intent}",
     }
+
 
 def main():
     ensure_structure()
@@ -457,15 +490,15 @@ def main():
                 continue
 
             if intent == "LINT":
-                handle_lint()
+                print(handle_lint())
                 continue
 
             if intent == "INGEST":
-                handle_ingest(user_input)
+                print(handle_ingest(user_input))
                 continue
 
             if intent == "QUERY":
-                handle_query(user_input)
+                print(handle_query(user_input))
                 continue
 
         except KeyboardInterrupt:
