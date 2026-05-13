@@ -49,6 +49,8 @@ Regole:
 - Usa solo campi JSON semplici: stringhe brevi, liste di stringhe, array.
 - Non inserire newline dentro le stringhe JSON.
 - Non copiare mai i valori di esempio nel JSON finale.
+- Non usare wrapper come "code", "data", "message" o strutture API simili: il JSON finale deve avere direttamente "pages", "index_entries" e "contradictions" come chiavi top-level.
+- Non inventare URL, domini o link. Se la fonte non contiene URL espliciti, lascia "links": [].
 - Sostituisci sempre titoli, slug, tag, summary e dettagli con contenuti reali estratti dalla fonte.
 - Se non sei sicuro della suddivisione, crea una pagina generale con titolo descrittivo della fonte.
 
